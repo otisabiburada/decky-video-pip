@@ -1,0 +1,17 @@
+{
+  "name": "YouTube PiP",
+  "author": "SANSO",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": [
+      "video",
+      "pip",
+      "youtube",
+      "cast",
+      "utility"
+    ],
+    "description": "Watch YouTube in a small window over your game. Cast from the YouTube app on your phone, or paste a link.",
+    "image": ""
+  }
+}

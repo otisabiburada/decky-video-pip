@@ -1,0 +1,262 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>YouTube PiP player</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+    font-family: "Motiva Sans", Arial, sans-serif; color: #c7d5e0; }
+  #p { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; pointer-events: none; }
+  /* Our own plain cover: hides YouTube's title bar, channel icon, share button, suggestions and
+     "Watch on YouTube" screens whenever the video is not playing. */
+  #cover { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center;
+    justify-content: center; text-align: center; padding: 12px; background: #0b0f14; gap: 6px; }
+  #cover .t { font-size: 14px; font-weight: bold; line-height: 1.3; max-height: 3.9em; overflow: hidden; }
+  #cover .s { font-size: 12px; opacity: .8; }
+  /* Topmost and transparent: every tap lands here, never on anything inside YouTube's player,
+     so nothing in the window can open a browser. */
+  #shield { position: fixed; inset: 0; background: transparent; }
+  #idle { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 12px; font-size: 14px; line-height: 1.35; background: #0b0f14; }
+  #msg { position: fixed; left: 0; right: 0; bottom: 0; padding: 5px 10px; font-size: 12px;
+    background: rgba(0, 0, 0, .72); display: none; }
+</style>
+</head>
+<body>
+<div id="p"></div>
+<div id="idle">YouTube PiP is ready.<br>Send a video from your phone (QR code in the Quick Access menu).</div>
+<div id="cover"><div class="t" id="ct"></div><div class="s" id="cs"></div></div>
+<div id="msg"></div>
+<div id="shield"></div>
+<script>
+(function () {
+  var Q = new URLSearchParams(location.search);
+  var S = Q.get('s') || '';
+  var player = null, ready = false, after = -1, seq = 0;
+  var lastErr = 0, blocked = false, loadTimer = 0, lastConn = true, active = false, played = false;
+  var OVERLAY_MS = 3500, playingSince = 0, lastSt = -1;  // YouTube shows its title/buttons for ~3 s after play starts
+  // subtitles: wanted or not, preferred language ('' = the device language), already switched off for this video
+  var ccWanted = false, ccLang = '', ccCleared = false;
+  var idleEl = document.getElementById('idle');
+  var msgEl = document.getElementById('msg');
+  var coverEl = document.getElementById('cover');
+
+  function state() { try { return player.getPlayerState(); } catch (e) { return -1; } }
+  // Subtitles through the player's captions module. The track list is only known once a video plays,
+  // so this runs on load, when playback starts, and once a second (it does nothing when already right).
+  function ccTrack() { try { return player.getOption('captions', 'track') || {}; } catch (e) { return {}; } }
+  function applyCC() {
+    if (!player || !ready || !active) return;
+    try {
+      if (!ccWanted) {
+        // YouTube may switch captions on by itself: clear them once per video. (It keeps reporting the old
+        // track afterwards even though nothing is shown, so the report below only trusts it when wanted.)
+        if (!ccCleared && ccTrack().languageCode) {
+          player.setOption('captions', 'track', {});
+          player.unloadModule('captions');
+          ccCleared = true;
+        }
+        return;
+      }
+      ccCleared = false;
+      player.loadModule('captions');
+      var list = player.getOption('captions', 'tracklist') || [];
+      var want = (ccLang || navigator.language || 'en').toLowerCase();
+      var short = want.slice(0, 2), pick = null;
+      if (!list.length) {
+        // after captions were switched off mid-video the list stays empty: ask for the language directly
+        if (!ccTrack().languageCode) {
+          player.setOption('captions', 'track', { languageCode: short });
+          if (!ccTrack().languageCode && short !== 'en') player.setOption('captions', 'track', { languageCode: 'en' });
+        }
+        return;
+      }
+      list.forEach(function (t) { var c = (t.languageCode || '').toLowerCase(); if (!pick && c === want) pick = t; });
+      list.forEach(function (t) { var c = (t.languageCode || '').toLowerCase(); if (!pick && c.slice(0, 2) === short) pick = t; });
+      list.forEach(function (t) { var c = (t.languageCode || '').toLowerCase(); if (!pick && c.slice(0, 2) === 'en') pick = t; });
+      pick = pick || list[0];
+      if (ccTrack().languageCode !== pick.languageCode) player.setOption('captions', 'track', { languageCode: pick.languageCode });
+    } catch (e) {}
+  }
+
+  // YouTube quirk: after captions were cleared, the same video does not show them again. A fresh load at the
+  // same second does, so that is the fallback when switching subtitles on mid-video.
+  function reloadForCC() {
+    if (!ccWanted || !active || ccTrack().languageCode) return;
+    try {
+      var id = (player.getVideoData() || {}).video_id, t = player.getCurrentTime() || 0, st = state();
+      if (!id) return;
+      if (st === 2) player.cueVideoById({ videoId: id, startSeconds: t });
+      else player.loadVideoById({ videoId: id, startSeconds: t });
+    } catch (e) {}
+  }
+
+  function updateCover() {
+    var st = state();
+    if (st === 1 && lastSt !== 1) {
+      playingSince = Date.now();
+      setTimeout(updateCover, OVERLAY_MS + 100);
+    }
+    lastSt = st;
+    if (st === 1) played = true;
+    var fresh = st === 1 && Date.now() - playingSince < OVERLAY_MS;
+    var show = active && (lastErr || fresh || (st !== 1 && !(st === 3 && played)));
+    coverEl.style.display = show ? 'flex' : 'none';
+    if (!show) return;
+    var title = '';
+    try { title = (player.getVideoData() || {}).title || ''; } catch (e) {}
+    var sub = lastErr ? (ERR[lastErr] || ('Player error ' + lastErr)) :
+      blocked ? 'Tap the video to start.' :
+      st === 2 ? 'Paused' : st === 0 ? 'Ended' : st === 1 ? 'Playing' : 'Loading...';
+    document.getElementById('ct').textContent = title;
+    document.getElementById('cs').textContent = sub;
+  }
+
+  function url(path) {
+    return path + (path.indexOf('?') < 0 ? '?' : '&') + 's=' + encodeURIComponent(S);
+  }
+  function say(t) {
+    if (!t) { msgEl.style.display = 'none'; return; }
+    msgEl.textContent = t; msgEl.style.display = 'block';
+  }
+  function showIdle(t) {
+    if (t) idleEl.textContent = t;
+    idleEl.style.display = 'flex';
+  }
+
+  var ERR = {
+    2: 'Invalid video link.',
+    5: 'The player hit an HTML5 error.',
+    100: 'Video not found or private.',
+    101: 'The owner does not allow embedding this video.',
+    150: 'The owner does not allow embedding this video.',
+    153: 'YouTube refused to embed this video (player configuration).'
+  };
+
+  function doLoad(c) {
+    seq = c.seq || 0; blocked = false; lastErr = 0; active = true; played = false;
+    say('');
+    idleEl.style.display = 'none';
+    updateCover();
+    try {
+      if (c.muted) player.mute(); else player.unMute();
+      if (typeof c.vol === 'number') player.setVolume(Math.max(0, Math.min(100, c.vol)));
+      ccWanted = !!c.cc; ccLang = c.ccLang || ''; ccCleared = false;
+      if (c.video) {
+        player.loadVideoById({ videoId: c.video, startSeconds: c.start || 0 });
+      } else if (c.list) {
+        player.loadPlaylist({ list: c.list, listType: 'playlist', index: 0, startSeconds: c.start || 0 });
+      }
+    } catch (e) { say('Load failed: ' + e); }
+    clearTimeout(loadTimer);
+    loadTimer = setTimeout(function () {
+      var st = player.getPlayerState();
+      if (st !== 1 && st !== 3 && !lastErr) {
+        blocked = true; updateCover();
+      }
+    }, 4500);
+  }
+
+  function run(c) {
+    if (!c) return;
+    try {
+      switch (c.cmd) {
+        case 'load': doLoad(c); break;
+        case 'toggle':
+          if (player.getPlayerState() === 1) player.pauseVideo(); else player.playVideo();
+          break;
+        case 'seek':
+          player.seekTo(Math.max(0, player.getCurrentTime() + (c.rel || 0)), true); break;
+        case 'play':
+          player.playVideo(); break;
+        case 'pause':
+          player.pauseVideo(); break;
+        case 'seekto':
+          player.seekTo(Math.max(0, c.t || 0), true); break;
+        case 'setvol':
+          player.setVolume(Math.max(0, Math.min(100, c.vol || 0))); break;
+        case 'nextvideo':
+          player.nextVideo(); break;
+        case 'vol':
+          player.setVolume(Math.max(0, Math.min(100, player.getVolume() + (c.delta || 0)))); break;
+        case 'mute':
+          if (player.isMuted()) player.unMute(); else player.mute(); break;
+        case 'cc':
+          ccWanted = !!c.cc; ccLang = c.ccLang || ''; applyCC();
+          if (ccWanted) setTimeout(reloadForCC, 1500);
+          break;
+        case 'stop':
+          player.stopVideo(); active = false; updateCover(); say('');
+          showIdle('Stopped. Send another video from your phone.'); break;
+      }
+    } catch (e) { say('Command failed: ' + e); }
+  }
+
+  function poll() {
+    fetch(url('/api/poll?after=' + after)).then(function (r) { return r.json(); }).then(function (r) {
+      if (!lastConn) { lastConn = true; say(''); }
+      after = r.last;
+      if (r.init) run(r.init);
+      (r.cmds || []).forEach(run);
+    }).catch(function () {
+      lastConn = false; say('Lost connection to the Deck plugin. Retrying...');
+    }).then(function () { setTimeout(poll, 600); });
+  }
+
+  function report() {
+    if (!ready) return;
+    var vd = {}, pl = null, last = true;
+    try { vd = player.getVideoData() || {}; } catch (e) {}
+    try {
+      pl = player.getPlaylist && player.getPlaylist();
+      if (pl && pl.length) last = player.getPlaylistIndex() >= pl.length - 1;
+    } catch (e) {}
+    var body = {
+      seq: seq, state: player.getPlayerState(), t: player.getCurrentTime() || 0,
+      d: player.getDuration() || 0, vol: player.getVolume(), muted: player.isMuted(),
+      title: vd.title || '', id: vd.video_id || '', err: lastErr, blocked: blocked, last: last,
+      cc: ccWanted ? (ccTrack().languageCode || '') : ''
+    };
+    applyCC();
+    fetch(url('/api/report'), { method: 'POST', body: JSON.stringify(body) }).catch(function () {});
+    updateCover();
+  }
+
+  window.onYouTubeIframeAPIReady = function () {
+    player = new YT.Player('p', {
+      width: '100%', height: '100%',
+      playerVars: { autoplay: 1, controls: 0, disablekb: 1, fs: 0, playsinline: 1, rel: 0,
+        iv_load_policy: 3, modestbranding: 1, origin: location.origin, widget_referrer: location.href.split('?')[0] },
+      events: {
+        onReady: function () {
+          ready = true;
+          try { document.getElementById('p').setAttribute('tabindex', '-1'); } catch (e) {}
+          poll(); setInterval(report, 1000);
+        },
+        onStateChange: function (e) {
+          if (e.data === 1) { blocked = false; say(''); applyCC(); }
+          updateCover();
+        },
+        onError: function (e) {
+          lastErr = e.data; updateCover();  // the cover shows the reason and hides YouTube's own error screen
+        }
+      }
+    });
+  };
+
+  // A tap only ever starts a video that is not playing; it never reaches YouTube's player.
+  document.getElementById('shield').addEventListener('click', function (e) {
+    e.preventDefault();
+    if (player && ready && active && state() !== 1) { try { player.playVideo(); } catch (err) {} }
+  });
+
+  var tag = document.createElement('script');
+  tag.src = 'https://www.youtube.com/iframe_api';
+  tag.onerror = function () { showIdle('Could not reach youtube.com. Check the Deck\'s internet connection.'); };
+  document.head.appendChild(tag);
+})();
+</script>
+</body>
+</html>

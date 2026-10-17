@@ -1,0 +1,14 @@
+YouTube PiP builds on ideas from decky-pip by Ross Squires (BSD-3-Clause),
+https://github.com/rossimo/decky-pip :
+  - showing a web page in a native Steam browser view (CreateBrowserView) over the game,
+  - asking Steam for the "Notification" UI composition level so that view is drawn over the game,
+  - reading the Steam menus' on-screen size so the window can stay out of their way.
+The code in this repository is a new implementation; the approach and the composition-hook
+lookup follow decky-pip. The QR encoder follows the structure of Project Nayuki's QR Code
+generator library (MIT).
+
+The cast receiver (ytpip_lounge.py, and the SSDP/DIAL discovery in main.py) is a new implementation of YouTube's
+"Lounge" screen protocol and the DIAL discovery protocol. No code was copied; the protocol is documented by
+open-source projects such as yt-cast-receiver (patrickkfkan) and plaincast.
+
+Not affiliated with, endorsed by or sponsored by YouTube or Google. YouTube is a trademark of Google LLC.

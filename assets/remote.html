@@ -1,0 +1,199 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deck YouTube remote</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: #0e141b; color: #dbe5ee;
+    font: 16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; max-width: 560px; margin-inline: auto; }
+  h1 { font-size: 20px; margin: 4px 0 14px; }
+  .card { background: #17212c; border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  .now { font-weight: 600; word-break: break-word; }
+  .sub { color: #8fa3b5; font-size: 13px; margin-top: 2px; }
+  input[type=text] { width: 100%; font-size: 16px; padding: 12px; border-radius: 10px; border: 1px solid #2c3b4a;
+    background: #0e141b; color: inherit; }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  button { flex: 1; font-size: 15px; padding: 12px 6px; border: 0; border-radius: 10px; background: #2a4a68;
+    color: #fff; font-weight: 600; }
+  button.alt { background: #26323f; }
+  button:active { filter: brightness(1.25); }
+  #msg { min-height: 20px; margin-top: 8px; font-size: 14px; color: #8fd1a5; }
+  #msg.err { color: #ff9b9b; }
+  ol { margin: 8px 0 0; padding-left: 22px; }
+  li { margin: 6px 0; word-break: break-word; }
+  li { padding: 6px 0; border-bottom: 1px solid #22303d; }
+  li .qrow { display: flex; gap: 6px; margin-top: 6px; }
+  li .qrow button { padding: 8px 4px; font-size: 13px; background: #26323f; }
+  li .qrow button.rm { background: #4a2a2a; }
+  input[type=range] { width: 100%; margin: 8px 0 0; accent-color: #1a9fff; }
+  .times { display: flex; justify-content: space-between; color: #8fa3b5; font-size: 12px; }
+  .vol { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 13px; color: #8fa3b5; }
+  .vol input { margin: 0; flex: 1; }
+  .bad { color: #ff9b9b; font-size: 14px; margin-top: 6px; display: none; }
+  button.on { background: #1a9fff; }
+  .off { color: #ffb86b; font-size: 13px; margin-top: 6px; }
+  a { color: #7cc4ff; }
+</style>
+</head>
+<body>
+<h1>Deck YouTube remote</h1>
+
+<div class="card">
+  <div class="now" id="now">Nothing playing</div>
+  <div class="sub" id="status"></div>
+  <div class="off" id="off" style="display:none">The player on the Deck is not open. Open "YouTube PiP" mode in its Quick Access panel.</div>
+  <div class="bad" id="bad"></div>
+  <input type="range" id="seek" min="0" max="0" step="1" value="0" aria-label="Position">
+  <div class="times"><span id="tcur">0:00</span><span id="tdur">0:00</span></div>
+  <div class="row">
+    <button class="alt" data-a="seek" data-v="-10">-10s</button>
+    <button id="pp" data-a="playpause">Play / Pause</button>
+    <button class="alt" data-a="seek" data-v="10">+10s</button>
+  </div>
+  <div class="row">
+    <button class="alt" data-a="vol" data-v="-10">Vol -</button>
+    <button class="alt" data-a="mute">Mute</button>
+    <button class="alt" data-a="vol" data-v="10">Vol +</button>
+    <button class="alt" data-a="next">Next</button>
+  </div>
+  <div class="vol"><span>Volume</span><input type="range" id="vol" min="0" max="100" step="5" value="100" aria-label="Volume"></div>
+  <div class="row">
+    <button class="alt" id="rep">Repeat: off</button>
+    <button class="alt" data-a="subs" id="subs">Subtitles: off</button>
+    <button class="alt" data-a="retry" id="retry" style="display:none">Retry</button>
+  </div>
+</div>
+
+<div class="card">
+  <input type="text" id="url" inputmode="url" autocomplete="off" autocapitalize="off"
+         placeholder="Paste a YouTube link here">
+  <div class="row">
+    <button id="play">Play now</button>
+    <button class="alt" id="queue">Add to queue</button>
+  </div>
+  <div id="msg"></div>
+  <div class="sub" style="margin-top:10px">In the YouTube app: Share, then Copy link, then paste it above.
+    <a href="https://m.youtube.com" target="_blank" rel="noopener">Open YouTube</a></div>
+</div>
+
+<div class="card">
+  <div class="sub">Queue</div>
+  <ol id="q"></ol>
+  <div class="sub" id="qe">Empty</div>
+  <div class="row"><button class="alt" id="qclear" style="display:none">Clear queue</button></div>
+</div>
+
+<script>
+(function () {
+  var K = location.pathname.split('/')[2] || '';
+  var msg = document.getElementById('msg');
+  function say(t, err) { msg.textContent = t || ''; msg.className = err ? 'err' : ''; }
+
+  var seekEl = document.getElementById('seek'), volEl = document.getElementById('vol');
+  var drag = { seek: 0, vol: 0 };   // time until which the user's own value wins over the server's
+  var snap = { t: 0, d: 0, playing: false, at: 0 };
+  function fmt(x) {
+    x = Math.max(0, Math.floor(x || 0));
+    var h = Math.floor(x / 3600), m = Math.floor((x % 3600) / 60), r = x % 60;
+    var two = function (n) { return n < 10 ? '0' + n : '' + n; };
+    return h ? h + ':' + two(m) + ':' + two(r) : m + ':' + two(r);
+  }
+  function tick() {
+    var t = snap.t + (snap.playing ? (Date.now() - snap.at) / 1000 : 0);
+    if (snap.d) t = Math.min(t, snap.d);
+    document.getElementById('tcur').textContent = fmt(t);
+    document.getElementById('tdur').textContent = fmt(snap.d);
+    if (Date.now() > drag.seek) { seekEl.max = Math.max(1, Math.floor(snap.d)); seekEl.value = Math.floor(t); }
+  }
+  var REP = { off: 'Repeat: off', all: 'Repeat: all', one: 'Repeat: one' };
+  var ERRS = { 2: 'Invalid video link.', 5: 'Player error.', 100: 'Video not found or private.',
+    101: 'This video cannot be embedded.', 150: 'This video cannot be embedded.', 153: 'YouTube refused to embed this video.' };
+
+  function qbtn(label, cls, fn) {
+    var b = document.createElement('button');
+    b.textContent = label; if (cls) b.className = cls; b.onclick = fn;
+    return b;
+  }
+
+  function render(s) {
+    if (!s) return;
+    var now = document.getElementById('now');
+    now.textContent = s.now ? (s.now.title || s.now.video || s.now.list || 'Playing') : 'Nothing playing';
+    document.getElementById('status').textContent = s.now ? (s.playing ? 'Playing' : 'Paused') + (s.muted ? ' (muted)' : '') : '';
+    document.getElementById('off').style.display = s.player_online ? 'none' : 'block';
+    snap = { t: s.t || 0, d: s.d || 0, playing: !!s.playing, at: Date.now() };
+    tick();
+    if (Date.now() > drag.vol && s.vol !== undefined) volEl.value = s.vol;
+    var sb = document.getElementById('subs');
+    sb.textContent = s.subtitles ? 'Subtitles: on' : 'Subtitles: off';
+    sb.className = s.subtitles ? 'on' : 'alt';
+    var rb = document.getElementById('rep');
+    rb.textContent = REP[s.repeat] || REP.off;
+    rb.className = s.repeat && s.repeat !== 'off' ? 'on' : 'alt';
+    var bad = document.getElementById('bad');
+    var why = s.err ? (ERRS[s.err] || ('Player error ' + s.err + '.')) : (s.blocked ? 'Autoplay was blocked. Tap the video on the Deck to start.' : '');
+    bad.textContent = why; bad.style.display = why ? 'block' : 'none';
+    document.getElementById('retry').style.display = s.err || s.blocked ? 'block' : 'none';
+    var ol = document.getElementById('q');
+    ol.textContent = '';
+    (s.queue || []).forEach(function (it, i) {
+      var li = document.createElement('li');
+      li.appendChild(document.createTextNode(it.title || it.video || it.list || 'Video'));
+      var row = document.createElement('div');
+      row.className = 'qrow';
+      row.appendChild(qbtn('Play', '', function () { act('playnow', i); }));
+      row.appendChild(qbtn('Up', '', function () { act('up', i); }));
+      row.appendChild(qbtn('Down', '', function () { act('down', i); }));
+      row.appendChild(qbtn('Remove', 'rm', function () { act('remove', i); }));
+      li.appendChild(row);
+      ol.appendChild(li);
+    });
+    document.getElementById('qe').style.display = (s.queue && s.queue.length) ? 'none' : 'block';
+    document.getElementById('qclear').style.display = (s.queue && s.queue.length) ? 'block' : 'none';
+  }
+
+  function act(a, v, u) {
+    return fetch('/api/remote?k=' + encodeURIComponent(K), {
+      method: 'POST', body: JSON.stringify({ action: a, value: v, url: u })
+    }).then(function (r) { return r.json(); }).then(function (r) {
+      if (r.message && (u || !r.ok)) say(r.message, !r.ok);
+      render(r.state);
+      return r;
+    }).catch(function () { say('Cannot reach the Deck. Same Wi-Fi?', true); });
+  }
+
+  seekEl.oninput = function () { drag.seek = Date.now() + 2500; document.getElementById('tcur').textContent = fmt(seekEl.value); };
+  seekEl.onchange = function () { drag.seek = Date.now() + 1500; act('seekto', Number(seekEl.value)); };
+  volEl.oninput = function () { drag.vol = Date.now() + 2500; };
+  volEl.onchange = function () { drag.vol = Date.now() + 2500; act('setvol', Number(volEl.value)); };
+  document.getElementById('rep').onclick = function () { act('repeat'); };
+  document.getElementById('qclear').onclick = function () { act('clear'); };
+  setInterval(tick, 500);
+  document.querySelectorAll('button[data-a]').forEach(function (b) {
+    b.onclick = function () {
+      var v = b.getAttribute('data-v');
+      act(b.getAttribute('data-a'), v === null ? null : Number(v));
+    };
+  });
+  ['play', 'queue'].forEach(function (a) {
+    document.getElementById(a).onclick = function () {
+      var el = document.getElementById('url');
+      var val = el.value.trim();
+      if (!val) { say('Paste a link first.', true); return; }
+      act(a, null, val).then(function (r) { if (r && r.ok) { el.value = ''; } });
+    };
+  });
+
+  function refresh() {
+    fetch('/api/rstate?k=' + encodeURIComponent(K)).then(function (r) { return r.json(); })
+      .then(render).catch(function () {});
+  }
+  refresh();
+  setInterval(refresh, 1500);
+})();
+</script>
+</body>
+</html>
