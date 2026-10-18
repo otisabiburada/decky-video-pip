@@ -29,25 +29,9 @@ like you would to a TV, or scan a QR code and paste a link.
 
 You need [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) installed.
 
-**From URL (easiest)**
-1. Decky settings (gear icon in the Decky tab) > enable **Developer mode**.
-2. Decky settings > **Developer** > **Install Plugin from URL**, paste:
-   `https://github.com/YOUR_GITHUB_NAME/youtube-pip/releases/download/v0.6.0/youtube-pip-v0.6.0.zip`
-
-**From a ZIP file**: download `youtube-pip-v0.6.0.zip` from [Releases](../../releases), then
-Decky settings > Developer > **Install Plugin from ZIP File**.
-
-**From Konsole** (Desktop Mode):
-```
-unzip youtube-pip-v0.6.0.zip
-sudo cp -r youtube-pip ~/homebrew/plugins/ && sudo systemctl restart plugin_loader
-```
-
-## Use
-
 ![How casting works](docs/how-it-works.png)
 
-1. Open the Quick Access menu (the `...` button) > **YouTube PiP**.
+1. Open the Quick Access menu (the `...` button) > **Video PiP**.
 2. On your phone (same Wi-Fi as the Deck), open the YouTube app, tap the **cast** icon and pick **Steam Deck**.
    Not in the list? Press **TV code** in the panel and enter it in the app: Settings > Watch on TV > Enter TV code.
 3. Pick a video on the phone. It plays in the window on the Deck; the phone is the remote.
