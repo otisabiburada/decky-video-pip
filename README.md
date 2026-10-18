@@ -1,6 +1,4 @@
-# YouTube PiP for Steam Deck
-
-![YouTube PiP banner](docs/banner.png)
+# Video PiP for Steam Deck
 
 A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin that plays YouTube in a small
 picture-in-picture window **over your game** in Gaming Mode. Pick videos from your phone: cast from the YouTube app
